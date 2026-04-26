@@ -13,7 +13,7 @@ class Autopro
     {
         global $db, $user;
 
-        if (!$user->rights->autopro->config->read) {
+        if (!$user->rights->autopro->main->read) {
             throw new RestException(403, "Access denied");
         }
 
@@ -24,16 +24,17 @@ class Autopro
 
         $repair = new Repair($db);
 
-        $pagination = $repair->fetchAll($limit, $offset);
+        $rows = $repair->fetchAll($limit, $offset);
+        $total = $repair->count();
 
         return [
             'pagination' => [
                 'page' => $page,
                 'limit' => $limit,
-                'total' => (int) $pagination['total'],
-                'pages' => $limit > 0 ? ceil($pagination['total'] / $limit) : 1
+                'total' => (int) $total,
+                'pages' => $limit > 0 ? ceil($total / $limit) : 1
             ],
-            'data' => $pagination['data']
+            'data' => $rows
         ];
     }
 }

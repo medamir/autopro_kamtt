@@ -3,94 +3,142 @@
 require '../../main.inc.php';
 require_once DOL_DOCUMENT_ROOT . '/custom/autopro/class/repair.class.php';
 
-if (!$user->rights->autopro->config->read) accessforbidden();
+$langs->loadLangs(['autopro@autopro']);
+
+if (!$user->rights->autopro->main->read) {
+    accessforbidden();
+}
 
 $repair = new Repair($db);
 
-$page = GETPOST('page', 'int') ?: 1;
-$limit = GETPOST('limit', 'int') ?: 10;
-$oldLimit = $limit;
+$page       = GETPOST('page', 'int');
+$limit      = GETPOST('limit', 'int');
+$sortfield  = GETPOST('sortfield', 'alpha');
+$sortorder  = GETPOST('sortorder', 'alpha');
 
-$pagination = $repair->fetchAll($limit, ($page - 1) * $limit);
-$total = (int) ($pagination['total'] ?? 0);
-$nbpages = ($limit > 0) ? ceil($total / $limit) : 1;
+if (!$sortfield) $sortfield = 'r.rowid';
+if (!$sortorder) $sortorder = 'DESC';
+if ($limit <= 0) $limit = 10;
+if ($page < 0) $page = 0;
 
-llxHeader();
+$offset = $page * $limit;
+
+$filters = [
+    'ref' => GETPOST('search_ref', 'alphanohtml'),
+    'label' => GETPOST('search_label', 'alphanohtml'),
+    'registration_number' => GETPOST('search_reg', 'alphanohtml'),
+    'brand' => GETPOST('search_brand', 'alphanohtml'),
+    'status' => GETPOST('search_status', 'int'),
+    'fee' => GETPOST('search_fee', 'alpha'),
+    'kilometrage' => GETPOST('search_km', 'int'),
+];
+
+$total = $repair->count($filters);
+$rows  = $repair->fetchAll($limit, $offset, $filters, $sortfield, $sortorder);
+
+$param = '';
+
+foreach ($filters as $k => $v) {
+    if ($v !== '' && $v !== null) {
+        $param .= '&search_' . $k . '=' . urlencode($v);
+    }
+}
+
+llxHeader('', $langs->trans("AutoProRepairs"));
 
 print_barre_liste(
-    "Ordres de réparation",
+    $langs->trans("AutoProRepairs"),
     $page,
     $_SERVER["PHP_SELF"],
-    "",
+    $param,
+    $sortfield,
+    $sortorder,
     '',
-    '',
-    '',
-    -1,
+    0,
     $total,
     'tools',
     0,
     '',
     '',
     $limit,
-    0
+    1
 );
 
-$fields = [
-    ['key' => 'rowid', 'label' => 'ID'],
-    ['key' => 'ref', 'label' => 'Référence'],
-    ['key' => 'label', 'label' => 'Label'],
-    ['key' => 'registration_number', 'label' => 'Immatriculation'],
-    ['key' => 'brand', 'label' => 'Marque'],
-    ['key' => 'fee', 'label' => 'Tarif'],
-    ['key' => 'kilometrage', 'label' => 'Kilométrage'],
-    ['key' => 'dates', 'label' => 'Délai'],
-    ['key' => 'status', 'label' => 'Status'],
-    ['key' => 'actions', 'label' => '']
-];
+print '<form method="GET" action="' . $_SERVER["PHP_SELF"] . '">';
 
-$html = '<div class="div-table-responsive-no-min"><table class="noborder centpercent">';
-$html .= '<thead><tr  class="liste_titre">';
+print '<input type="hidden" name="sortfield" value="' . $sortfield . '">';
+print '<input type="hidden" name="sortorder" value="' . $sortorder . '">';
 
-foreach ($fields as $field) {
-    if ($field['key'] === 'actions' && !$user->rights->autopro->config->write) {
-        continue;
-    } else {
-        $html .= '<th>' . $field['label'] . '</th>';
+print '<div class="div-table-responsive-no-min">';
+print '<table class="noborder centpercent">';
+
+print '<tr class="liste_titre">';
+
+print_liste_field_titre($langs->trans("Id"), $_SERVER["PHP_SELF"], "r.rowid", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("Ref"), $_SERVER["PHP_SELF"], "r.ref", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("Label"), $_SERVER["PHP_SELF"], "r.label", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("RegistrationNumber"), $_SERVER["PHP_SELF"], "r.registration_number", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("Brand"), $_SERVER["PHP_SELF"], "b.label", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("Fee"), $_SERVER["PHP_SELF"], "r.fee", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("Kilometrage"), $_SERVER["PHP_SELF"], "r.kilometrage", "", $param, '', $sortfield, $sortorder);
+print_liste_field_titre($langs->trans("Status"), $_SERVER["PHP_SELF"], "r.status", "", $param, '', $sortfield, $sortorder);
+print '<th></th>';
+
+print '</tr>';
+
+print '<tr class="liste_titre">';
+
+print '<td></td>';
+
+print '<td><input type="text" style="width: 100px;" name="search_ref" value="' . dol_escape_htmltag($filters['ref']) . '"></td>';
+print '<td><input type="text" name="search_label" value="' . dol_escape_htmltag($filters['label']) . '"></td>';
+print '<td><input type="text" name="search_reg" value="' . dol_escape_htmltag($filters['registration_number']) . '"></td>';
+print '<td><input type="text" name="search_brand" value="' . dol_escape_htmltag($filters['brand']) . '"></td>';
+print '<td><input type="text" name="search_fee" value="' . dol_escape_htmltag($filters['fee']) . '"></td>';
+print '<td><input type="text" name="search_km" value="' . dol_escape_htmltag($filters['kilometrage']) . '"></td>';
+
+print '<td>
+    <select name="search_status">
+        <option value=""></option>
+        <option value="0"' . ($filters['status'] === 0 ? ' selected' : '') . '>' . $langs->trans("Draft") . '</option>
+        <option value="1"' . ($filters['status'] == 1 ? ' selected' : '') . '>' . $langs->trans("Validated") . '</option>
+    </select>
+</td>';
+
+print '<td><button type="submit" class="button">' . $langs->trans("Filter") . '</button></td>';
+
+print '</tr>';
+
+foreach ($rows as $obj) {
+
+    print '<tr class="oddeven">';
+
+    print '<td>' . $obj->rowid . '</td>';
+    print '<td>' . htmlspecialchars($obj->ref) . '</td>';
+    print '<td>' . htmlspecialchars($obj->label) . '</td>';
+    print '<td>' . htmlspecialchars($obj->registration_number) . '</td>';
+    print '<td>' . htmlspecialchars($obj->brand) . '</td>';
+    print '<td>' . price($obj->fee) . '</td>';
+    print '<td>' . (int) $obj->kilometrage . '</td>';
+
+    print '<td>';
+    print ($obj->status == 1)
+        ? '<span class="badge badge-success">' . $langs->trans("Validated") . '</span>'
+        : '<span class="badge badge-warning">' . $langs->trans("Draft") . '</span>';
+    print '</td>';
+
+    print '<td>';
+    if ($user->rights->autopro->main->write) {
+        print '<a href="card.php?id=' . $obj->rowid . '" class="butAction">' . $langs->trans("Modify") . '</a>';
     }
+    print '</td>';
+
+    print '</tr>';
 }
 
-$html .= '</tr></thead>';
-$html .= '<tbody>';
-foreach ($pagination['data'] as $item) {
-    $html .= '<tr>';
-    foreach ($fields as $field) {
-        $key = $field['key'];
+print '</table>';
+print '</div>';
 
-        if ($key  === 'dates') {
-            $value = sprintf(
-                '<div style="white-space: nowrap;"><div>Dépôt : %s</div><div>Retour prévu : %s</div></div>',
-                $item->delivery_date ? dol_print_date($item->delivery_date, 'dayhour') : 'Non défini',
-                $item->expected_return_date ? dol_print_date($item->expected_return_date, 'dayhour') : 'Non défini'
-            );
-        } else  if ($key === 'status') {
-            $value =  $item->$key == 1 ? '<span class="badge badge-success">Validé</span>' : '<span class="badge badge-warning">Brouillon</span>';
-        } else if ($key === 'actions') {
-            if ($user->rights->autopro->config->write) {
-                $value = sprintf('<a href="card.php?id=%d">Modifier</a>', $item->rowid);
-            } else {
-                continue;
-            }
-        } else if (!empty($item->$key)) {
-            $value = htmlspecialchars($item->$key);
-        } else {
-            $value = "Non défini";
-        }
-
-        $html .= '<td>' . $value . '</td>';
-    }
-    $html .= '</tr>';
-}
-$html .= '</tbody></table></div>';
-print($html);
+print '</form>';
 
 llxFooter();

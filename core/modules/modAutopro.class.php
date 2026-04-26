@@ -4,19 +4,27 @@ include_once DOL_DOCUMENT_ROOT . '/core/modules/DolibarrModules.class.php';
 
 class modAutopro extends DolibarrModules
 {
+    public const BRAND_TABLE = MAIN_DB_PREFIX . 'c_autopro_brand';
+    public const REPARATION_TABLE = MAIN_DB_PREFIX . 'autopro_repair';
+
+    /**
+     * Constructor
+     */
     public function __construct($db)
     {
         global $conf;
 
         $this->db = $db;
 
-        $this->numero = 99900;
+        $this->numero = 104500;
         $this->rights_class = 'autopro';
 
-        $this->family = "garage";
+        $this->family = "other";
         $this->name = "autopro";
-        $this->description = "Gestion des ordres de réparation";
-        $this->version = '0.8.0';
+        $this->description = "ModDescription";
+        $this->version = '1.0.0';
+
+        $this->langfiles = ["autopro@autopro"];
 
         $this->const_name = 'MAIN_MODULE_AUTOPRO';
         $this->picto = 'tools';
@@ -25,122 +33,170 @@ class modAutopro extends DolibarrModules
             'hooks' => ['propalcard'],
             'triggers' => 1,
             'api' => 1,
-            'sql' => 1,
         ];
 
-        $this->api = [
-            'reparations' => [
-                'file' => 'autopro/class/api_autopro.class.php',
-                'class' => 'Reparations',
-            ],
-        ];
-
-        $this->dirs = ['/autopro/sql'];
-
-        $this->dictionaries = [
-            'langs' => 'autopro@autopro',
-            'tabname' => [MAIN_DB_PREFIX . 'c_autopro_brand'],
-            'tablib' => ['AutoPro Marques'],
-            'tabsql' => [
-                "SELECT rowid, label, fee, active FROM " . MAIN_DB_PREFIX . "c_autopro_brand"
-            ],
-            'tabsqlsort' => ['label ASC'],
-            'tabfield' => ['label,fee'],
-            'tabfieldvalue' => ['label,fee'],
-            'tabfieldinsert' => ['label,fee'],
-            'tabrowid' => ['rowid'],
-            'tabcond' => [$conf->autopro->enabled],
-        ];
-
-        $this->const = [
-            [
-                'AUTOPRO_DEFAULT_HOURLY_RATE',
-                'chaine',
-                '80',
-                'Tarif horaire global par défaut',
-                0
-            ],
-        ];
+        $this->config_page_url = ['setup.php@autopro'];
 
         $this->initRights();
+        $this->initDictionaries();
+        $this->initConstants();
         $this->initMenu();
     }
 
+    /**
+     * Module init
+     */
     public function init($options = '')
     {
-        global $db;
+        $sqlFiles = glob(sprintf('%s/custom/autopro/sql/*.sql', DOL_DOCUMENT_ROOT));
 
-        $result = $this->_init([], $options);
-        if ($result < 0) return -1;
+        $queries = [];
 
-        $this->runInstall($db);
+        if (is_array($sqlFiles)) {
+            foreach ($sqlFiles as $file) {
+                $sql = $this->getqueryFromFile($file);
 
-        return 1;
-    }
-
-    public function remove($options = '')
-    {
-        global $db;
-
-        $db->query("DROP TABLE IF EXISTS " . MAIN_DB_PREFIX . "autopro_repair");
-        $db->query("DROP TABLE IF EXISTS " . MAIN_DB_PREFIX . "c_autopro_brand");
-
-        return $this->_remove([], $options);
-    }
-
-    private function runInstall($db)
-    {
-        $file = DOL_DOCUMENT_ROOT . '/custom/autopro/sql/llx_autopro_repair.sql';
-
-        if (file_exists($file)) {
-            $sql = file_get_contents($file);
-            $queries = array_filter(array_map('trim', explode(';', $sql)));
-
-            foreach ($queries as $q) {
-                if ($q) $db->query($q);
-            }
-        }
-
-        $file = DOL_DOCUMENT_ROOT . '/custom/autopro/json/brands.json';
-
-        if (file_exists($file)) {
-            $data = json_decode(file_get_contents($file), true);
-
-            if (is_array($data)) {
-                foreach ($data as $brand) {
-                    $label = $db->escape($brand['name']);
-                    $fee = (float) ($brand['fee'] ?? 0);
-
-                    $sql = "SELECT rowid FROM " . MAIN_DB_PREFIX . "c_autopro_brand WHERE label='" . $label . "'";
-                    $res = $db->query($sql);
-
-                    if ($res && $db->num_rows($res) == 0) {
-                        $db->query("INSERT INTO " . MAIN_DB_PREFIX . "c_autopro_brand (label, fee, active)
-                                    VALUES ('" . $label . "', " . $fee . ", 1)");
-                    }
+                if ($sql) {
+                    $queries[] = $sql;
                 }
             }
         }
 
-        $db->query("DELETE FROM " . MAIN_DB_PREFIX . "extrafields
-                    WHERE elementtype='propal'
-                    AND name='observations_technicien'");
+        $result = $this->_init($queries, $options);
 
-        $db->query("INSERT INTO " . MAIN_DB_PREFIX . "extrafields
-                    (elementtype,label,name,type,size,entity,enabled)
-                    VALUES
-                    ('propal','Observations technicien','observations_technicien','text','10',1,1)");
+        if ($result < 0) {
+            return -1;
+        }
+
+        $this->createExtraFields();
+        $this->seedBrandQueries();
+
+        return 1;
     }
 
-    private function initRights()
+    /**
+     * Read SQL file content
+     */
+    private function getqueryFromFile($filePath)
     {
-        $this->rights = [
-            [$this->numero + 1, 'Réparations', 'r', 0, 'config', 'read'],
-            [$this->numero + 2, 'Créer/Modifier une réparation', 'w', 0, 'config', 'write'],
-            [$this->numero + 3, 'Supprimer une réparation', 'd', 0, 'config', 'delete'],
+        if (!file_exists($filePath)) {
+            return false;
+        }
+
+        return file_get_contents($filePath);
+    }
+
+    /**
+     * Seed brands from JSON
+     */
+    private function seedBrandQueries()
+    {
+        $file = sprintf('%s/custom/autopro/json/brands.json', DOL_DOCUMENT_ROOT);
+
+        if (!file_exists($file)) {
+            return;
+        }
+
+        $data = json_decode(file_get_contents($file), true);
+
+        if (!is_array($data)) {
+            return;
+        }
+
+        foreach ($data as $brand) {
+            $label = $this->db->escape($brand['name']);
+            $fee = (float) ($brand['fee'] ?? 0);
+
+            $res = $this->db->query(
+                sprintf(
+                    "SELECT rowid FROM %s WHERE label='%s'",
+                    self::BRAND_TABLE,
+                    $label
+                )
+            );
+
+            if ($res && $this->db->num_rows($res) == 0) {
+                $this->db->query(
+                    sprintf(
+                        "INSERT INTO %s (label, fee, active) VALUES ('%s', %f, 1)",
+                        self::BRAND_TABLE,
+                        $label,
+                        $fee
+                    )
+                );
+            }
+        }
+    }
+
+    /**
+     * Dictionaries definition
+     */
+    private function initDictionaries()
+    {
+        $this->dictionaries = [
+            'langs' => 'autopro@autopro',
+            'tabname' => [self::BRAND_TABLE],
+            'tablib' => ['AutoProBrands'],
+            'tabsql' => [
+                sprintf(
+                    "SELECT rowid, label as BrandLabel, fee as BrandFee FROM %s as brand",
+                    self::BRAND_TABLE
+                )
+            ],
+            'tabsqlsort' => ['label ASC'],
+            'tabfield' => ['BrandLabel,BrandFee'],
+            'tabfieldvalue' => ['BrandLabel,BrandFee'],
+            'tabfieldinsert' => ['BrandLabel,BrandFee'],
+            'tabrowid' => ['rowid'],
+            'tabcond' => [isModEnabled('autopro')],
         ];
     }
 
+    /**
+     * Constants definition
+     */
+    private function initConstants()
+    {
+        $this->const = [
+            ['AUTOPRO_DEFAULT_HOURLY_RATE', 'chaine', '80', 'DefaultFee', 0],
+        ];
+    }
+
+    /**
+     * Extra fields creation
+     */
+    private function createExtraFields()
+    {
+        require_once DOL_DOCUMENT_ROOT . '/core/class/extrafields.class.php';
+
+        $extrafields = new ExtraFields($this->db);
+
+        $extrafields->addExtraField(
+            'observations_technicien',
+            'AutoproObservationsTechnicien',
+            'text',
+            0,
+            '',
+            'propal'
+        );
+    }
+
+    /**
+     * Rights definition
+     */
+    private function initRights()
+    {
+        $this->rights = [
+            [$this->numero + 1, 'RightsAutoProRead', 'r', 1, 'main', 'read'],
+            [$this->numero + 2, 'RightsAutoProWrite', 'w', 0, 'main', 'write'],
+            [$this->numero + 3, 'RightsAutoProDelete', 'd', 0, 'main', 'delete'],
+            [$this->numero + 5, 'RightsAutoProConfig', 'w', 0, 'config', 'write'],
+        ];
+    }
+
+    /**
+     * Menu definition
+     */
     private function initMenu()
     {
         $this->menu = [
@@ -154,7 +210,7 @@ class modAutopro extends DolibarrModules
                 'langs' => 'autopro@autopro',
                 'position' => 100,
                 'enabled' => '$conf->autopro->enabled',
-                'perms' => '$user->rights->autopro->config->read',
+                'perms' => '$user->rights->autopro->main->read',
                 'user' => 2,
                 'picto' => 'tools',
             ],
@@ -166,7 +222,7 @@ class modAutopro extends DolibarrModules
                 'langs' => 'autopro@autopro',
                 'position' => 100,
                 'enabled' => '$conf->autopro->enabled',
-                'perms' => '$user->admin',
+                'perms' => '$user->rights->autopro->config->write',
                 'user' => 2,
             ],
             [
@@ -179,7 +235,7 @@ class modAutopro extends DolibarrModules
                 'langs' => 'autopro@autopro',
                 'position' => 100,
                 'enabled' => '$conf->autopro->enabled',
-                'perms' => '$user->rights->autopro->config->read',
+                'perms' => '$user->rights->autopro->main->read',
                 'picto' => 'list',
             ],
             [
@@ -188,11 +244,11 @@ class modAutopro extends DolibarrModules
                 'titre' => 'Créer réparation',
                 'mainmenu' => 'autopro',
                 'leftmenu' => 'autopro_create',
-                'url' => '/custom/autopro/card.php?action=create',
+                'url' => '/custom/autopro/card.php',
                 'langs' => 'autopro@autopro',
                 'position' => 101,
                 'enabled' => '$conf->autopro->enabled',
-                'perms' => '$user->rights->autopro->config->write',
+                'perms' => '$user->rights->autopro->main->write',
                 'picto' => 'add',
             ],
         ];
